@@ -2,18 +2,18 @@
 
 ### 🧩 Overview
 
-This project spins up a **complete local streaming environment** using:
+This project sets up a **complete local streaming environment** using:
 
 * **Apache Kafka** & **Zookeeper** (via Confluent images)
-* **Apache Spark 3.5.1** (official multi-arch Python3 image)
-* A **Python Kafka Producer** sending JSON events
-* A **Spark Structured Streaming Job** consuming from Kafka, writing to:
+* **Apache Spark 3.5.1** (official Python3 multi-arch image)
+* A **Python Kafka Producer** sending random JSON events
+* A **Spark Structured Streaming Job** consuming from Kafka and writing to:
 
   * Parquet (`data/output/parquet/`)
   * CSV (`data/output/csv/`)
-  * Console (for debug)
+  * Console (for quick inspection)
 
-> ✅ Tested on Mac M1/M2/M3 (Apple Silicon) & Intel Docker Desktop
+> ✅ Fully tested on Mac M1/M2/M3 (Apple Silicon) and Intel Docker Desktop.
 
 ---
 
@@ -38,35 +38,41 @@ spark-kafka-pipeline/
 ### ⚙️ Prerequisites
 
 * Docker Desktop ≥ 4.x
-* Ports free: 2181, 9092, 9094, 7077, 8080, 8081
-* Internet access (for pulling images and Spark packages)
+* Free ports: 2181, 9092, 9094, 7077, 8080, 8081
+* Internet access for pulling images and Spark Kafka connector packages
 
 ---
 
 ### 🔧 Environment Configuration (`.env`)
 
 ```env
-# Kafka & Spark environment
+# Kafka & Spark core settings
 KAFKA_TOPIC=events
 MSGS_PER_SEC=5
 KAFKA_BOOTSTRAP_SERVERS=kafka:9092
 OUTPUT_PATH=/opt/spark-output/parquet
+
+# Spark streaming control
+TRIGGER_SECONDS=30            # time interval between batches
+MAX_RECORDS_PER_FILE=5000     # max records per file
+FILES_PER_PARTITION=1         # number of output files per day (dt) partition
 ```
 
-You can adjust message rate or topic name easily here.
+You can tune these parameters to balance data freshness and file count.
+For example, increasing `TRIGGER_SECONDS` to 60 or 120 will create fewer files.
 
 ---
 
 ### 🧱 Build & Run
 
 ```bash
-# Build and start everything
+# Build and start all containers
 docker compose up -d --build
 
-# View Spark logs (streaming job)
+# Watch Spark streaming logs
 docker compose logs -f spark-streaming
 
-# View Producer logs
+# Watch Kafka producer logs
 docker compose logs -f producer
 ```
 
@@ -74,45 +80,50 @@ docker compose logs -f producer
 
 ### 🔍 Verify Setup
 
-**List Kafka Topics:**
+**List Kafka Topics**
 
 ```bash
 docker compose exec kafka kafka-topics --bootstrap-server kafka:9092 --list
 ```
 
-**Inspect Output Files (on Host):**
+**Inspect Output Files (on Host)**
 
 ```bash
 ls data/output/parquet/dt=*
 ls data/output/csv/dt=*
 ```
 
-**Spark UI:** [http://localhost:8080](http://localhost:8080)
-**Worker UI:** [http://localhost:8081](http://localhost:8081)
+**Web Interfaces**
+
+* Spark Master UI → [http://localhost:8080](http://localhost:8080)
+* Spark Worker UI → [http://localhost:8081](http://localhost:8081)
 
 ---
 
 ### 💡 Data Flow
 
-1. **Producer** emits JSON messages to Kafka topic `events`
+1. **Producer** emits JSON messages to the Kafka topic defined in `.env` (default: `events`):
 
    ```json
    {
-     "event_id": "evt-123",
+     "event_id": "evt-001",
      "ts": "2025-11-06T12:30:00Z",
      "value": 45.67,
      "source": "demo-producer"
    }
    ```
 
-2. **Kafka Broker** stores and serves them to subscribers.
+2. **Kafka Broker** stores and publishes messages to subscribers.
 
-3. **Spark Structured Streaming** reads live events, parses JSON,
-   and writes results to:
+3. **Spark Streaming Job** reads events from Kafka, parses JSON, and writes to:
 
-   * **Console** (stdout)
-   * **Parquet** (`data/output/parquet/dt=YYYY-MM-DD`)
-   * **CSV** (`data/output/csv/dt=YYYY-MM-DD`)
+   * Console (for logs)
+   * Parquet (`data/output/parquet/dt=YYYY-MM-DD`)
+   * CSV (`data/output/csv/dt=YYYY-MM-DD`)
+
+4. Output files are **batched every `TRIGGER_SECONDS` seconds**,
+   with limits on **records per file** and **files per partition**
+   (reducing the explosion of small files).
 
 ---
 
@@ -120,23 +131,29 @@ ls data/output/csv/dt=*
 
 #### `spark/app.py`
 
-* Reads from Kafka topic
-* Parses JSON schema
-* Writes to Parquet and CSV simultaneously
-* Prints stream records to console
-* Uses checkpointing for exactly-once semantics
+* Reads streaming data from Kafka
+* Parses JSON messages with schema
+* Writes to both **Parquet** and **CSV**
+* Limits file count via:
+
+  * `TRIGGER_SECONDS`
+  * `MAX_RECORDS_PER_FILE`
+  * `FILES_PER_PARTITION`
+* Outputs to console for quick debugging
+* Includes checkpointing for recovery and exactly-once semantics
 
 #### `producer/producer.py`
 
-* Uses `kafka-python` to send random events
-* Rate-controlled via `MSGS_PER_SEC` from `.env`
-* Automatically connects to `kafka:9092`
+* Sends random JSON messages to Kafka
+* Controlled by `MSGS_PER_SEC` in `.env`
+* Uses `kafka-python` client
+* Auto-connects to the broker `kafka:9092`
 
 #### `docker-compose.yml`
 
-* Manages Zookeeper, Kafka, Spark (master/worker/streaming), and Producer
-* Uses official `apache/spark:3.5.1-python3` image
-* Auto-creates Kafka topic via `kafka-init`
+* Defines services: Zookeeper, Kafka, Spark Master/Worker, Producer
+* Uses `apache/spark:3.5.1-python3` image (multi-arch)
+* Automatically creates Kafka topic via `kafka-init` script
 
 ---
 
@@ -154,6 +171,9 @@ data/output/
     └── _chk/
 ```
 
+Each partition folder (`dt=YYYY-MM-DD`) contains the data for that date.
+File count is automatically controlled via `.env` parameters.
+
 ---
 
 ### 🧼 Stop & Cleanup
@@ -162,8 +182,22 @@ data/output/
 docker compose down -v
 docker system prune -f
 ```
+
 ---
-### ✨ Author
+
+### 🧩 Tips & Troubleshooting
+
+| Problem                 | Likely Cause                  | Solution                                                   |
+| ----------------------- | ----------------------------- | ---------------------------------------------------------- |
+| Too many output files   | Frequent micro-batches        | Increase `TRIGGER_SECONDS` or reduce `FILES_PER_PARTITION` |
+| No data in Parquet/CSV  | Producer not sending messages | Check `docker compose logs -f producer`                    |
+| Spark job not starting  | Kafka topic not yet created   | Restart `spark-streaming` after `kafka-init` finishes      |
+| Slow performance on Mac | Emulation or heavy batching   | Adjust batch size or enable Rosetta in Docker              |
+
+---
+
+### ✨ Maintainer
 
 **Sandeep Mohanty**
-Kafka + PySpark Streaming Pipeline (2025)
+*Data Engineering Project — Kafka + PySpark Streaming Pipeline (2025)*
+
