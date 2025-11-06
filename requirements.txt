@@ -1,0 +1,5 @@
+pyspark==3.5.1
+pandas==2.2.3
+pyarrow==17.0.0
+fastparquet==2024.5.0
+kafka-python==2.0.2
